@@ -1,0 +1,19 @@
+{
+  "name": "moodle-data-export",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "axios": "^1.8.4",
+    "excel4node": "^1.8.2",
+    "express": "^5.1.0",
+    "googleapis": "^148.0.0",
+    "node-cron": "^3.0.3"
+  }
+}
