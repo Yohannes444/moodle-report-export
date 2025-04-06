@@ -207,7 +207,7 @@ async function generateAssignmentReport() {
 
         for (const submission of allSubmissions) {
             const student = userMap.get(submission.studentId) || {};
-            ws.cell(row, 1).number(submission.shortname);
+            ws.cell(row, 1).number(submission.courseId);
             ws.cell(row, 2).string(submission.submissionName);
             ws.cell(row, 3).string(student.fullname || 'Unknown');
             ws.cell(row, 4).string(student.username || 'Unknown');
