@@ -9,7 +9,7 @@ const app = express();
 const port = 4005;
 
 const BASE_URL = 'https://study.tfshighschool.com/webservice/rest/server.php';
-const TOKEN = '7832f67cbd6579f7908da44969002e7a';
+const TOKEN = '2930400cf30439f2aed3774c924c3669';
 const FORMAT = 'json';
 
 // Helper function to make API calls
@@ -63,6 +63,8 @@ async function uploadToGoogleSheets(filePath) {
 }
 
 // Function to generate report for all courses (assignments and quizzes)
+// ... (previous code remains the same until generateAssignmentReport function)
+
 async function generateAssignmentReport() {
     try {
         const wb = new xl.Workbook();
@@ -95,7 +97,7 @@ async function generateAssignmentReport() {
             .filter(course => course.id !== 1)
             .map(course => 
                 fetchMoodleData('core_course_get_contents', { courseid: course.id })
-                    .then(contents => ({ courseId: course.id, contents }))
+                    .then(contents => ({ courseId: course.id, shortname: course.shortname, contents }))
                     .catch(err => {
                         console.error(`Error fetching contents for course ${course.id}:`, err.message);
                         return { courseId: course.id, contents: [] };
@@ -105,7 +107,7 @@ async function generateAssignmentReport() {
         console.log('Fetched contents for all courses');
 
         const modulePromises = [];
-        for (const { courseId, contents } of courseResults) {
+        for (const { courseId, shortname, contents } of courseResults) {
             const assignments = [];
             const quizzes = [];
             contents.forEach(section => {
@@ -115,19 +117,20 @@ async function generateAssignmentReport() {
                             id: module.instance,
                             name: module.name,
                             cmid: module.id,
-                            courseId
+                            courseId,
+                            shortname
                         });
                     } else if (module.modname === 'quiz') {
                         quizzes.push({
                             id: module.instance,
                             name: module.name,
                             cmid: module.id,
-                            courseId
+                            courseId,
+                            shortname
                         });
                     }
                 });
             });
-            console.log(`Found ${assignments.length} assignments and ${quizzes.length} quizzes in course ${courseId}`);
 
             if (assignments.length > 0) {
                 const assignmentIds = assignments.map(a => a.id);
@@ -154,7 +157,6 @@ async function generateAssignmentReport() {
             }
         }
         const moduleResults = await Promise.all(modulePromises);
-        console.log('Fetched submissions and attempts for all modules');
 
         const allSubmissions = [];
         for (const { type, items, data } of moduleResults) {
@@ -162,29 +164,27 @@ async function generateAssignmentReport() {
                 data.assignments.forEach(assignmentData => {
                     const assignment = items.find(a => a.id === assignmentData.assignmentid);
                     const submissionList = assignmentData.submissions || [];
-                    console.log(`Found ${submissionList.length} submissions for ${assignment.name}`);
                     submissionList.forEach(submission => {
                         allSubmissions.push({
-                            courseId: assignment.courseId,
+                            courseId: assignment.shortname,
                             submissionName: assignment.name,
                             cmid: assignment.cmid,
                             studentId: submission.userid,
                             dateSubmitted: new Date(submission.timemodified * 1000).toISOString(),
-                            type: 'assign' // Add type to submission object
+                            type: 'assign'
                         });
                     });
                 });
             } else if (type === 'quiz' && data.attempts) {
                 data.attempts.forEach(attempt => {
                     const quiz = items.find(q => q.id === attempt.quiz);
-                    console.log(`Found quiz attempt for ${quiz.name}`);
                     allSubmissions.push({
-                        courseId: quiz.courseId,
+                        courseId: quiz.shortname,
                         submissionName: quiz.name,
                         cmid: quiz.cmid,
                         studentId: attempt.userid,
                         dateSubmitted: new Date(attempt.timefinish * 1000).toISOString(),
-                        type: 'quiz' // Add type to submission object
+                        type: 'quiz'
                     });
                 });
             }
@@ -203,11 +203,11 @@ async function generateAssignmentReport() {
         );
         const userResults = await Promise.all(userPromises);
         const userMap = new Map(userResults.map(r => [r.studentId, r.user]));
-        console.log(`Fetched data for ${userResults.length} unique students`);
 
         for (const submission of allSubmissions) {
+            console.log(`Processing submission for student ${submission.studentId}`);
             const student = userMap.get(submission.studentId) || {};
-            ws.cell(row, 1).number(submission.courseId);
+            ws.cell(row, 1).string(submission.courseId);
             ws.cell(row, 2).string(submission.submissionName);
             ws.cell(row, 3).string(student.fullname || 'Unknown');
             ws.cell(row, 4).string(student.username || 'Unknown');
@@ -234,12 +234,24 @@ async function generateAssignmentReport() {
 
         const googleSheetLink = await uploadToGoogleSheets(filePath);
         console.log(`Report generated and uploaded to Google Sheets: ${googleSheetLink}`);
+
+        // Delete the local Excel file after successful upload
+        fs.unlink(filePath, (err) => {
+            if (err) {
+                console.error('Error deleting local Excel file:', err.message);
+            } else {
+                console.log('Local Excel file deleted successfully:', filePath);
+            }
+        });
+
         return googleSheetLink;
     } catch (error) {
         console.error('Error generating report:', error.response ? error.response.data : error.message);
         throw error;
     }
 }
+
+// ... (rest of the code remains the same)
 
 // Express route to trigger report generation manually
 app.get('/generate-report', async (req, res) => {
