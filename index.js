@@ -262,6 +262,10 @@ app.get('/generate-report', async (req, res) => {
         res.status(500).send('Error generating report');
     }
 });
+app.get("/", async (req, res) => {
+        res.send(`hellow `);
+ 
+    })
 
 // Schedule the report to run every day at midnight (00:00)
 cron.schedule('0 0 * * *', async () => {
