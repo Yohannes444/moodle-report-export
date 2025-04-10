@@ -4,15 +4,15 @@ const xl = require('excel4node');
 const { google } = require('googleapis');
 const fs = require('fs');
 const https = require("https");
-
+const config = require('./config.json');
 const cron = require('node-cron');
 
 const app = express();
-const port = 4005;
+const port = config.port;
+const BASE_URL = config.baseUrl;
+const TOKEN = config.token;
+const FORMAT = config.format;
 
-const BASE_URL = 'https://study.tfshighschool.com/webservice/rest/server.php';
-const TOKEN = '2930400cf30439f2aed3774c924c3669';
-const FORMAT = 'json';
 
 // Helper function to make API calls
 async function fetchMoodleData(wsfunction, params) {
@@ -28,7 +28,7 @@ async function fetchMoodleData(wsfunction, params) {
 
 // Google Sheets API setup
 const auth = new google.auth.GoogleAuth({
-    keyFile: 'moodleapi-456414-245626e993c8.json',
+    keyFile: config.serviceAccountKey, // Use config instead of process.env
     scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
 });
 

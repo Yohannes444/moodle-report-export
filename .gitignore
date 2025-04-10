@@ -1,4 +1,7 @@
 ./node_modules
 /node_modules
 node_modules
-moodlereportuploader.json
+moodlereportuploader.
+.env
+config.json
+moodleapi-456414-245626e993c8.json
