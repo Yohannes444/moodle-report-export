@@ -28,6 +28,7 @@ async function fetchMoodleData(wsfunction, params) {
 
 // Google Sheets API setup
 const auth = new google.auth.GoogleAuth({
+    // keyFile: 'moodlereportuploader.json',
     scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
 });
 
