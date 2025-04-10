@@ -253,6 +253,8 @@ async function generateAssignmentReport() {
         return googleSheetLink;
     } catch (error) {
         console.error('Error generating report:', error.response ? error.response.data : error.message);
+        console.error('Error details:', error.response ? error.response.data.error.details : error.message);
+        console.error('Error details:', error.response ? error.response.data.error.errors : error.message);
         throw error;
     }
 }
