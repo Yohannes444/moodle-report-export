@@ -3,6 +3,8 @@ const axios = require('axios');
 const xl = require('excel4node');
 const { google } = require('googleapis');
 const fs = require('fs');
+const https = require("https");
+
 const cron = require('node-cron');
 
 const app = express();
@@ -15,7 +17,12 @@ const FORMAT = 'json';
 // Helper function to make API calls
 async function fetchMoodleData(wsfunction, params) {
     const url = `${BASE_URL}?wstoken=${TOKEN}&wsfunction=${wsfunction}&moodlewsrestformat=${FORMAT}`;
-    const response = await axios.get(url, { params });
+    const response = await axios.get(url, {
+        params,
+        httpsAgent: new https.Agent({
+            rejectUnauthorized: false, // Disable SSL verification
+          }),
+    });
     return response.data;
 }
 
@@ -88,7 +95,7 @@ async function generateAssignmentReport() {
         ];
         headers.forEach((header, index) => ws.cell(1, index + 1).string(header));
         let row = 2;
-
+        console.log('Fetching courses...');
         const courses = await fetchMoodleData('core_course_get_courses', {});
         console.log(`Found ${courses.length} courses`);
 
