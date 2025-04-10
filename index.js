@@ -6,7 +6,7 @@ const cron = require('node-cron');
 const app = express();
 
 const BASE_URL = 'https://study.tfshighschool.com/webservice/rest/server.php';
-const TOKEN = 'your_moodle_token_here'; // Replace with your actual Moodle token
+const TOKEN = '2930400cf30439f2aed3774c924c3669'; // Replace with your actual Moodle token
 const FORMAT = 'json';
 
 async function fetchMoodleData(wsfunction, params) {
