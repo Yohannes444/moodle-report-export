@@ -1,7 +1,10 @@
 const express = require('express');
 const axios = require('axios');
+const xl = require('excel4node');
 const { google } = require('googleapis');
+const fs = require('fs');
 const https = require("https");
+
 const cron = require('node-cron');
 
 const app = express();
@@ -14,31 +17,85 @@ const FORMAT = 'json';
 // Helper function to make API calls
 async function fetchMoodleData(wsfunction, params) {
     const url = `${BASE_URL}?wstoken=${TOKEN}&wsfunction=${wsfunction}&moodlewsrestformat=${FORMAT}`;
+    const response = await axios.get(url, {
+        params,
+        httpsAgent: new https.Agent({
+            rejectUnauthorized: false, // Disable SSL verification
+          }),
+    });
+    return response.data;
+}
+
+// Google Sheets API setup
+const auth = new google.auth.GoogleAuth({
+    // keyFile: 'moodlereportuploader-77ec89bd52ec.json',
+    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
+});
+
+const sheets = google.sheets({ version: 'v4', auth });
+const drive = google.drive({ version: 'v3', auth });
+
+// Function to upload .xlsx file to Google Drive and convert to Google Sheets
+async function uploadToGoogleSheets(filePath) {
     try {
-        const response = await axios.get(url, {
-            params,
-            httpsAgent: new https.Agent({
-                rejectUnauthorized: false, // Disable SSL verification
-            }),
+        const fileMetadata = {
+            name: 'All_Courses_Submissions_' + new Date().toISOString() + '.xlsx',
+            mimeType: 'application/vnd.google-apps.spreadsheet',
+        };
+        const media = {
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            body: fs.createReadStream(filePath),
+        };
+
+        const response = await drive.files.create({
+            resource: fileMetadata,
+            media: media,
+            fields: 'id, webViewLink',
         });
-        return response.data;
+
+        await drive.permissions.create({
+            fileId: response.data.id,
+            requestBody: {
+                role: 'reader',
+                type: 'anyone',
+            },
+        });
+
+        console.log('File uploaded to Google Sheets and made public:', response.data.webViewLink);
+        return response.data.webViewLink;
     } catch (error) {
-        console.error(`Error fetching Moodle data for ${wsfunction}:`, error.response ? error.response.data : error.message);
+        console.error('Error uploading to Google Sheets:', error.message);
         throw error;
     }
 }
 
-// Google Sheets API setup with ADC
-const auth = new google.auth.GoogleAuth({
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    projectId: '928317390511', // Explicitly set the project ID to avoid mismatches
-});
-
-const sheets = google.sheets({ version: 'v4', auth });
-
 // Function to generate report for all courses (assignments and quizzes)
+// ... (previous code remains the same until generateAssignmentReport function)
+
 async function generateAssignmentReport() {
     try {
+        const wb = new xl.Workbook();
+        const ws = wb.addWorksheet('Submissions');
+
+        ws.column(1).setWidth(10);  // Course ID
+        ws.column(2).setWidth(30);  // Submission Name
+        ws.column(3).setWidth(20);  // Student Name
+        ws.column(4).setWidth(20);  // Student Username
+        ws.column(5).setWidth(30);  // Student Email
+        ws.column(6).setWidth(25);  // Date Submitted
+        ws.column(7).setWidth(50);  // Direct Link to Submission
+
+        const headers = [
+            'Course ID',
+            'Submission Name',
+            'Student Name',
+            'Student Username',
+            'Student Email',
+            'Date Submitted',
+            'Direct Link to Submission'
+        ];
+        headers.forEach((header, index) => ws.cell(1, index + 1).string(header));
+        let row = 2;
         console.log('Fetching courses...');
         const courses = await fetchMoodleData('core_course_get_courses', {});
         console.log(`Found ${courses.length} courses`);
@@ -154,78 +211,56 @@ async function generateAssignmentReport() {
         const userResults = await Promise.all(userPromises);
         const userMap = new Map(userResults.map(r => [r.studentId, r.user]));
 
-        // Prepare data for Google Sheets
-        const headers = [
-            'Course ID',
-            'Submission Name',
-            'Student Name',
-            'Student Username',
-            'Student Email',
-            'Date Submitted',
-            'Direct Link to Submission'
-        ];
-        const values = [headers]; // Start with headers
-
         for (const submission of allSubmissions) {
             console.log(`Processing submission for student ${submission.studentId}`);
             const student = userMap.get(submission.studentId) || {};
-            const row = [
-                submission.courseId,
-                submission.submissionName,
-                student.fullname || 'Unknown',
-                student.username || 'Unknown',
-                student.email || 'Unknown',
-                submission.dateSubmitted,
+            ws.cell(row, 1).string(submission.courseId);
+            ws.cell(row, 2).string(submission.submissionName);
+            ws.cell(row, 3).string(student.fullname || 'Unknown');
+            ws.cell(row, 4).string(student.username || 'Unknown');
+            ws.cell(row, 5).string(student.email || 'Unknown');
+            ws.cell(row, 6).string(submission.dateSubmitted);
+            ws.cell(row, 7).string(
                 `${BASE_URL.replace('/webservice/rest/server.php', '')}/mod/${submission.type}/view.php?id=${submission.cmid}`
-            ];
-            values.push(row);
+            );
+            row++;
         }
 
-        // Log authentication details for debugging
-        const authClient = await auth.getClient();
-        console.log('Auth client type:', authClient.constructor.name);
-        console.log('Requested scopes:', authClient.scopes);
-        console.log('Project ID:', authClient.projectId || 'Not set');
-
-        // Create a new spreadsheet
-        const spreadsheet = await sheets.spreadsheets.create({
-            requestBody: {
-                properties: {
-                    title: 'All_Courses_Submissions_' + new Date().toISOString(),
-                },
-            },
-        });
-
-        const spreadsheetId = spreadsheet.data.spreadsheetId;
-        console.log(`Created Google Sheet with ID: ${spreadsheetId}`);
-
-        // Write data to the sheet
-        if (values.length === 1) { // Only headers, no data
+        const filePath = 'All_Courses_Submissions.xlsx';
+        if (row === 2) {
             console.log('No submissions found for any assignments or quizzes across all courses.');
-            values.push(['No submissions found']);
+            ws.cell(2, 1).string('No submissions found');
         }
+        await new Promise((resolve, reject) => {
+            wb.write(filePath, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        console.log('Excel file generated:', filePath);
 
-        await sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: 'Sheet1!A1',
-            valueInputOption: 'RAW',
-            requestBody: {
-                values,
-            },
+        const googleSheetLink = await uploadToGoogleSheets(filePath);
+        console.log(`Report generated and uploaded to Google Sheets: ${googleSheetLink}`);
+
+        // Delete the local Excel file after successful upload
+        fs.unlink(filePath, (err) => {
+            if (err) {
+                console.error('Error deleting local Excel file:', err.message);
+            } else {
+                console.log('Local Excel file deleted successfully:', filePath);
+            }
         });
 
-        const sheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
-        console.log(`Report generated and uploaded to Google Sheets: ${sheetUrl}`);
-        return sheetUrl;
+        return googleSheetLink;
     } catch (error) {
         console.error('Error generating report:', error.response ? error.response.data : error.message);
-        if (error.response && error.response.data && error.response.data.error) {
-            console.error('Error details:', error.response.data.error.details || error.response.data.error);
-            console.error('Error details:', error.response.data.error.errors || error.response.data.error);
-        }
+        console.error('Error details:', error.response ? error.response.data.error.details : error.message);
+        console.error('Error details:', error.response ? error.response.data.error.errors : error.message);
         throw error;
     }
 }
+
+// ... (rest of the code remains the same)
 
 // Express route to trigger report generation manually
 app.get('/generate-report', async (req, res) => {
@@ -236,10 +271,10 @@ app.get('/generate-report', async (req, res) => {
         res.status(500).send('Error generating report');
     }
 });
-
 app.get("/", async (req, res) => {
-    res.send(`hello`);
-});
+        res.send(`hellow `);
+ 
+    })
 
 // Schedule the report to run every day at midnight (00:00)
 cron.schedule('0 0 * * *', async () => {
