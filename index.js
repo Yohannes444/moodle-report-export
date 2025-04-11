@@ -13,22 +13,38 @@ const BASE_URL = config.baseUrl;
 const TOKEN = config.token;
 const FORMAT = config.format;
 
-
 // Helper function to make API calls
 async function fetchMoodleData(wsfunction, params) {
-    const url = `${BASE_URL}?wstoken=${TOKEN}&wsfunction=${wsfunction}&moodlewsrestformat=${FORMAT}`;
-    const response = await axios.get(url, {
-        params,
-        httpsAgent: new https.Agent({
-            rejectUnauthorized: false, // Disable SSL verification
-          }),
-    });
-    return response.data;
+    try {
+        const url = `${BASE_URL}?wstoken=${TOKEN}&wsfunction=${wsfunction}&moodlewsrestformat=${FORMAT}`;
+        const response = await axios.get(url, {
+            params,
+            httpsAgent: new https.Agent({
+                rejectUnauthorized: false, // Disable SSL verification
+            }),
+        });
+
+        if (!response.data) {
+            throw new Error(`Empty response from Moodle API for ${wsfunction}`);
+        }
+
+        if (response.data.errorcode || response.data.exception) {
+            throw new Error(`Moodle API error: ${response.data.message || response.data.exception}`);
+        }
+
+        return response.data;
+    } catch (error) {
+        console.error(`Error fetching Moodle data for ${wsfunction}:`, error.message);
+        if (error.response) {
+            console.error('Response data:', error.response.data);
+        }
+        throw error;
+    }
 }
 
 // Google Sheets API setup
 const auth = new google.auth.GoogleAuth({
-    keyFile: config.serviceAccountKey, // Use config instead of process.env
+    keyFile: config.serviceAccountKey,
     scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
 });
 
@@ -39,7 +55,7 @@ const drive = google.drive({ version: 'v3', auth });
 async function uploadToGoogleSheets(filePath) {
     try {
         const fileMetadata = {
-            name: 'All_Courses_Submissions_' + new Date().toISOString() + '.xlsx',
+            name: `Ungraded_Submissions_${new Date().toISOString()}.xlsx`,
             mimeType: 'application/vnd.google-apps.spreadsheet',
         };
         const media = {
@@ -69,14 +85,13 @@ async function uploadToGoogleSheets(filePath) {
     }
 }
 
-// Function to generate report for all courses (assignments and quizzes)
-// ... (previous code remains the same until generateAssignmentReport function)
-
+// Function to generate report for ungraded assignments and quizzes
 async function generateAssignmentReport() {
     try {
         const wb = new xl.Workbook();
-        const ws = wb.addWorksheet('Submissions');
+        const ws = wb.addWorksheet('Ungraded Submissions');
 
+        // Set column widths
         ws.column(1).setWidth(10);  // Course ID
         ws.column(2).setWidth(30);  // Submission Name
         ws.column(3).setWidth(20);  // Student Name
@@ -85,6 +100,7 @@ async function generateAssignmentReport() {
         ws.column(6).setWidth(25);  // Date Submitted
         ws.column(7).setWidth(50);  // Direct Link to Submission
 
+        // Set headers
         const headers = [
             'Course ID',
             'Submission Name',
@@ -96,12 +112,15 @@ async function generateAssignmentReport() {
         ];
         headers.forEach((header, index) => ws.cell(1, index + 1).string(header));
         let row = 2;
+
         console.log('Fetching courses...');
-        const courses = await fetchMoodleData('core_course_get_courses', {});
+        const coursesResponse = await fetchMoodleData('core_course_get_courses', {});
+        console.log('Raw courses response:', coursesResponse);
+        const courses = Array.isArray(coursesResponse) ? coursesResponse : [];
         console.log(`Found ${courses.length} courses`);
 
         const coursePromises = courses
-            .filter(course => course.id !== 1)
+            .filter(course => course && course.id !== 1)
             .map(course => 
                 fetchMoodleData('core_course_get_contents', { courseid: course.id })
                     .then(contents => ({ courseId: course.id, shortname: course.shortname, contents }))
@@ -155,7 +174,22 @@ async function generateAssignmentReport() {
                 const quizIds = quizzes.map(q => q.id);
                 modulePromises.push(
                     fetchMoodleData('mod_quiz_get_user_attempts', { 'quizids': quizIds, 'status': 'finished' })
-                        .then(attemptsData => ({ type: 'quiz', items: quizzes, data: attemptsData }))
+                        .then(async attemptsData => {
+                            const ungradedAttempts = [];
+                            for (const attempt of attemptsData.attempts || []) {
+                                const gradeData = await fetchMoodleData('mod_quiz_get_user_best_grade', {
+                                    quizid: attempt.quiz,
+                                    userid: attempt.userid
+                                }).catch(err => {
+                                    console.error(`Error fetching grade for quiz ${attempt.quiz}, user ${attempt.userid}:`, err.message);
+                                    return { hasgrade: false };
+                                });
+                                if (!gradeData.hasgrade) {
+                                    ungradedAttempts.push(attempt);
+                                }
+                            }
+                            return { type: 'quiz', items: quizzes, data: { attempts: ungradedAttempts } };
+                        })
                         .catch(err => {
                             console.error(`Error fetching quiz attempts for course ${courseId}:`, err.message);
                             return { type: 'quiz', items: quizzes, data: { attempts: [] } };
@@ -172,19 +206,27 @@ async function generateAssignmentReport() {
                     const assignment = items.find(a => a.id === assignmentData.assignmentid);
                     const submissionList = assignmentData.submissions || [];
                     submissionList.forEach(submission => {
-                        allSubmissions.push({
-                            courseId: assignment.shortname,
-                            submissionName: assignment.name,
-                            cmid: assignment.cmid,
-                            studentId: submission.userid,
-                            dateSubmitted: new Date(submission.timemodified * 1000).toISOString(),
-                            type: 'assign'
-                        });
+                        // Log submission details for debugging
+                        console.log(`Checking assignment: ${assignment.name}, User: ${submission.userid}, GradingStatus: ${submission.gradingstatus}, Time: ${new Date(submission.timemodified * 1000).toISOString()}`);
+                        
+                        // Include if ungraded (based on gradingstatus)
+                        if (submission.gradingstatus === 'notgraded' || !submission.grade || submission.grade === null) {
+                            console.log(`Including assignment submission: ${assignment.name}, User: ${submission.userid}, Submitted: ${new Date(submission.timemodified * 1000).toISOString()}`);
+                            allSubmissions.push({
+                                courseId: assignment.shortname,
+                                submissionName: assignment.name,
+                                cmid: assignment.cmid,
+                                studentId: submission.userid,
+                                dateSubmitted: new Date(submission.timemodified * 1000).toISOString(),
+                                type: 'assign'
+                            });
+                        }
                     });
                 });
             } else if (type === 'quiz' && data.attempts) {
                 data.attempts.forEach(attempt => {
                     const quiz = items.find(q => q.id === attempt.quiz);
+                    console.log(`Including quiz attempt: ${quiz.name}, User: ${attempt.userid}, Submitted: ${new Date(attempt.timefinish * 1000).toISOString()}`);
                     allSubmissions.push({
                         courseId: quiz.shortname,
                         submissionName: quiz.name,
@@ -197,40 +239,41 @@ async function generateAssignmentReport() {
             }
         }
 
-        const uniqueStudentIds = [...new Set(allSubmissions.map(s => s.studentId))];
-        const userPromises = uniqueStudentIds.map(studentId =>
-            fetchMoodleData('core_user_get_users_by_field', {
-                field: 'id',
-                'values[0]': studentId
-            }).then(users => ({ studentId, user: users[0] || {} }))
-            .catch(err => {
-                console.error(`Error fetching user ${studentId}:`, err.message);
-                return { studentId, user: {} };
-            })
-        );
-        const userResults = await Promise.all(userPromises);
-        const userMap = new Map(userResults.map(r => [r.studentId, r.user]));
-
-        for (const submission of allSubmissions) {
-            console.log(`Processing submission for student ${submission.studentId}`);
-            const student = userMap.get(submission.studentId) || {};
-            ws.cell(row, 1).string(submission.courseId);
-            ws.cell(row, 2).string(submission.submissionName);
-            ws.cell(row, 3).string(student.fullname || 'Unknown');
-            ws.cell(row, 4).string(student.username || 'Unknown');
-            ws.cell(row, 5).string(student.email || 'Unknown');
-            ws.cell(row, 6).string(submission.dateSubmitted);
-            ws.cell(row, 7).string(
-                `${BASE_URL.replace('/webservice/rest/server.php', '')}/mod/${submission.type}/view.php?id=${submission.cmid}`
+        if (allSubmissions.length === 0) {
+            console.log(`No ungraded submissions found.`);
+            ws.cell(2, 1).string(`No ungraded submissions found`);
+        } else {
+            const uniqueStudentIds = [...new Set(allSubmissions.map(s => s.studentId))];
+            const userPromises = uniqueStudentIds.map(studentId =>
+                fetchMoodleData('core_user_get_users_by_field', {
+                    field: 'id',
+                    'values[0]': studentId
+                }).then(users => ({ studentId, user: users[0] || {} }))
+                .catch(err => {
+                    console.error(`Error fetching user ${studentId}:`, err.message);
+                    return { studentId, user: {} };
+                })
             );
-            row++;
+            const userResults = await Promise.all(userPromises);
+            const userMap = new Map(userResults.map(r => [r.studentId, r.user]));
+
+            for (const submission of allSubmissions) {
+                console.log(`Processing ungraded submission for student ${submission.studentId}`);
+                const student = userMap.get(submission.studentId) || {};
+                ws.cell(row, 1).string(submission.courseId);
+                ws.cell(row, 2).string(submission.submissionName);
+                ws.cell(row, 3).string(student.fullname || 'Unknown');
+                ws.cell(row, 4).string(student.username || 'Unknown');
+                ws.cell(row, 5).string(student.email || 'Unknown');
+                ws.cell(row, 6).string(submission.dateSubmitted);
+                ws.cell(row, 7).string(
+                    `${BASE_URL.replace('/webservice/rest/server.php', '')}/mod/${submission.type}/view.php?id=${submission.cmid}`
+                );
+                row++;
+            }
         }
 
-        const filePath = 'All_Courses_Submissions.xlsx';
-        if (row === 2) {
-            console.log('No submissions found for any assignments or quizzes across all courses.');
-            ws.cell(2, 1).string('No submissions found');
-        }
+        const filePath = `Ungraded_Submissions.xlsx`;
         await new Promise((resolve, reject) => {
             wb.write(filePath, (err) => {
                 if (err) reject(err);
@@ -242,7 +285,6 @@ async function generateAssignmentReport() {
         const googleSheetLink = await uploadToGoogleSheets(filePath);
         console.log(`Report generated and uploaded to Google Sheets: ${googleSheetLink}`);
 
-        // Delete the local Excel file after successful upload
         fs.unlink(filePath, (err) => {
             if (err) {
                 console.error('Error deleting local Excel file:', err.message);
@@ -253,14 +295,13 @@ async function generateAssignmentReport() {
 
         return googleSheetLink;
     } catch (error) {
-        console.error('Error generating report:', error.response ? error.response.data : error.message);
-        console.error('Error details:', error.response ? error.response.data.error.details : error.message);
-        console.error('Error details:', error.response ? error.response.data.error.errors : error.message);
+        console.error('Error generating report:', error.message);
+        if (error.response) {
+            console.error('Response data:', error.response.data);
+        }
         throw error;
     }
 }
-
-// ... (rest of the code remains the same)
 
 // Express route to trigger report generation manually
 app.get('/generate-report', async (req, res) => {
@@ -271,10 +312,10 @@ app.get('/generate-report', async (req, res) => {
         res.status(500).send('Error generating report');
     }
 });
+
 app.get("/", async (req, res) => {
-        res.send(`hellow `);
- 
-    })
+    res.send(`hello`);
+});
 
 // Schedule the report to run every day at midnight (00:00)
 cron.schedule('0 0 * * *', async () => {
@@ -287,11 +328,11 @@ cron.schedule('0 0 * * *', async () => {
     }
 }, {
     scheduled: true,
-    timezone: 'America/New_York' // Adjust to your timezone
+    timezone: 'America/New_York'
 });
 
 // Start server
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
-    console.log('Cron job scheduled to run generateAssignmentReport every day at midnight');
+    console.log(`Cron job scheduled to run generateAssignmentReport every day at midnight`);
 });
