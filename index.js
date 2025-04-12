@@ -12,6 +12,7 @@ const port = config.port;
 const BASE_URL = config.baseUrl;
 const TOKEN = config.token;
 const FORMAT = config.format;
+const DAYS_BACK = config.daysBack || 600; // Default to 600 days if not specified
 
 // Helper function to make API calls
 async function fetchMoodleData(wsfunction, params) {
@@ -98,7 +99,7 @@ async function generateAssignmentReport() {
         ws.column(4).setWidth(20);  // Student Username
         ws.column(5).setWidth(30);  // Student Email
         ws.column(6).setWidth(25);  // Date Submitted
-        ws.column(7).setWidth(50);  // Direct Link to Submission
+        ws.column(7).setWidth(75);  // Direct Link to Submission
 
         // Set headers
         const headers = [
@@ -132,6 +133,9 @@ async function generateAssignmentReport() {
         const courseResults = await Promise.all(coursePromises);
         console.log('Fetched contents for all courses');
 
+        // Calculate time threshold for filtering submissions (X days ago)
+        const timeThreshold = Math.floor(Date.now() / 1000) - (DAYS_BACK * 24 * 60 * 60);
+
         const modulePromises = [];
         for (const { courseId, shortname, contents } of courseResults) {
             const assignments = [];
@@ -161,7 +165,7 @@ async function generateAssignmentReport() {
             if (assignments.length > 0) {
                 const assignmentIds = assignments.map(a => a.id);
                 modulePromises.push(
-                    fetchMoodleData('mod_assign_get_submissions', { 'assignmentids': assignmentIds })
+                    fetchMoodleData('mod_assign_get_submissions', { 'assignmentids': assignmentIds,"status":"submitted" })
                         .then(submissionsData => ({ type: 'assign', items: assignments, data: submissionsData }))
                         .catch(err => {
                             console.error(`Error fetching submissions for course ${courseId}:`, err.message);
@@ -184,7 +188,7 @@ async function generateAssignmentReport() {
                                     console.error(`Error fetching grade for quiz ${attempt.quiz}, user ${attempt.userid}:`, err.message);
                                     return { hasgrade: false };
                                 });
-                                if (!gradeData.hasgrade) {
+                                if (gradeData.hasgrade) {
                                     ungradedAttempts.push(attempt);
                                 }
                             }
@@ -209,8 +213,9 @@ async function generateAssignmentReport() {
                         // Log submission details for debugging
                         console.log(`Checking assignment: ${assignment.name}, User: ${submission.userid}, GradingStatus: ${submission.gradingstatus}, Time: ${new Date(submission.timemodified * 1000).toISOString()}`);
                         
-                        // Include if ungraded (based on gradingstatus)
-                        if (submission.gradingstatus === 'notgraded' || !submission.grade || submission.grade === null) {
+                        // Include if ungraded and within time threshold
+                        if ((submission.gradingstatus === 'notgraded') && 
+                            submission.timemodified >= timeThreshold) {
                             console.log(`Including assignment submission: ${assignment.name}, User: ${submission.userid}, Submitted: ${new Date(submission.timemodified * 1000).toISOString()}`);
                             allSubmissions.push({
                                 courseId: assignment.shortname,
@@ -226,22 +231,25 @@ async function generateAssignmentReport() {
             } else if (type === 'quiz' && data.attempts) {
                 data.attempts.forEach(attempt => {
                     const quiz = items.find(q => q.id === attempt.quiz);
-                    console.log(`Including quiz attempt: ${quiz.name}, User: ${attempt.userid}, Submitted: ${new Date(attempt.timefinish * 1000).toISOString()}`);
-                    allSubmissions.push({
-                        courseId: quiz.shortname,
-                        submissionName: quiz.name,
-                        cmid: quiz.cmid,
-                        studentId: attempt.userid,
-                        dateSubmitted: new Date(attempt.timefinish * 1000).toISOString(),
-                        type: 'quiz'
-                    });
+                    // Include if within time threshold
+                    if (attempt.timefinish >= timeThreshold) {
+                        console.log(`Including quiz attempt: ${quiz.name}, User: ${attempt.userid}, Submitted: ${new Date(attempt.timefinish * 1000).toISOString()}`);
+                        allSubmissions.push({
+                            courseId: quiz.shortname,
+                            submissionName: quiz.name,
+                            cmid: quiz.cmid,
+                            studentId: attempt.userid,
+                            dateSubmitted: new Date(attempt.timefinish * 1000).toISOString(),
+                            type: 'quiz'
+                        });
+                    }
                 });
             }
         }
 
         if (allSubmissions.length === 0) {
-            console.log(`No ungraded submissions found.`);
-            ws.cell(2, 1).string(`No ungraded submissions found`);
+            console.log(`No ungraded submissions found within the last ${DAYS_BACK} days.`);
+            ws.cell(2, 1).string(`No ungraded submissions found within the last ${DAYS_BACK} days.`);
         } else {
             const uniqueStudentIds = [...new Set(allSubmissions.map(s => s.studentId))];
             const userPromises = uniqueStudentIds.map(studentId =>
@@ -267,7 +275,7 @@ async function generateAssignmentReport() {
                 ws.cell(row, 5).string(student.email || 'Unknown');
                 ws.cell(row, 6).string(submission.dateSubmitted);
                 ws.cell(row, 7).string(
-                    `${BASE_URL.replace('/webservice/rest/server.php', '')}/mod/${submission.type}/view.php?id=${submission.cmid}`
+                    `${BASE_URL.replace('/webservice/rest/server.php', '')}/mod/${submission.type}/view.php?id=${submission.cmid}&rownum=0&action=grader&userid=${submission.studentId}`
                 );
                 row++;
             }
