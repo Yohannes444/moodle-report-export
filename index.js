@@ -54,10 +54,13 @@ function getGoogleApis(serviceAccountKey) {
 }
 
 // Function to upload .xlsx file to Google Drive and convert to Google Sheets
+// Function to upload .xlsx file to Google Drive and convert to Google Sheets
 async function uploadToGoogleSheets(drive, filePath, schoolName) {
     try {
+        // Format the date as YYYY-MM-DD for cleaner file names
+        const formattedDate = new Date().toISOString().split('T')[0];
         const fileMetadata = {
-            name: `Ungraded_Submissions_${schoolName}_${new Date().toISOString()}.xlsx`,
+            name: `Ungraded_Submissions_${schoolName}_${formattedDate}`,
             mimeType: 'application/vnd.google-apps.spreadsheet',
         };
         const media = {
@@ -196,7 +199,7 @@ async function generateAssignmentReportForSchool(school) {
                                 }
                             }
                             return { type: 'quiz', items: quizzes, data: { attempts: ungradedAttempts } };
-                            }).catch(err => {
+                        }).catch(err => {
                             console.error(`Error fetching quiz attempts for course ${courseId} in ${name}:`, err.message);
                             return { type: 'quiz', items: quizzes, data: { attempts: [] } };
                         })
@@ -279,7 +282,9 @@ async function generateAssignmentReportForSchool(school) {
             }
         }
 
-        const filePath = `Ungraded_Submissions_${name}.xlsx`;
+        // Use school name for local file to avoid conflicts
+        const formattedDate = new Date().toISOString().split('T')[0];
+        const filePath = `Ungraded_Submissions_${name}_${formattedDate}.xlsx`;
         await new Promise((resolve, reject) => {
             wb.write(filePath, (err) => {
                 if (err) reject(err);
