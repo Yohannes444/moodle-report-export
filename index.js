@@ -54,39 +54,65 @@ function getGoogleApis(serviceAccountKey) {
 }
 
 // Function to upload .xlsx file to Google Drive and convert to Google Sheets
-// Function to upload .xlsx file to Google Drive and convert to Google Sheets
-async function uploadToGoogleSheets(drive, filePath, schoolName) {
+async function uploadToGoogleSheets(drive, filePath, schoolName, existingFileId = null) {
     try {
-        // Format the date as YYYY-MM-DD for cleaner file names
-        const formattedDate = new Date().toISOString().split('T')[0];
         const fileMetadata = {
-            name: `Ungraded_Submissions_${schoolName}_${formattedDate}`,
+            name: `Ungraded_Submissions_${schoolName}`,
             mimeType: 'application/vnd.google-apps.spreadsheet',
         };
+        
         const media = {
             mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             body: fs.createReadStream(filePath),
         };
 
-        const response = await drive.files.create({
-            resource: fileMetadata,
-            media: media,
-            fields: 'id, webViewLink',
-        });
+        let response;
+        if (existingFileId) {
+            // Update existing file
+            response = await drive.files.update({
+                fileId: existingFileId,
+                resource: fileMetadata,
+                media: media,
+                fields: 'id, webViewLink',
+            });
+        } else {
+            // Create new file
+            response = await drive.files.create({
+                resource: fileMetadata,
+                media: media,
+                fields: 'id, webViewLink',
+            });
 
-        await drive.permissions.create({
-            fileId: response.data.id,
-            requestBody: {
-                role: 'reader',
-                type: 'anyone',
-            },
-        });
+            // Set permissions for new file
+            await drive.permissions.create({
+                fileId: response.data.id,
+                requestBody: {
+                    role: 'reader',
+                    type: 'anyone',
+                },
+            });
+        }
 
-        console.log(`File uploaded to Google Sheets for ${schoolName}:`, response.data.webViewLink);
-        return response.data.webViewLink;
+        console.log(`File ${existingFileId ? 'updated' : 'uploaded'} to Google Sheets for ${schoolName}:`, response.data.webViewLink);
+        return { id: response.data.id, link: response.data.webViewLink };
     } catch (error) {
-        console.error(`Error uploading to Google Sheets for ${schoolName}:`, error.message);
+        console.error(`Error ${existingFileId ? 'updating' : 'uploading'} to Google Sheets for ${schoolName}:`, error.message);
         throw error;
+    }
+}
+
+// Function to find existing Google Sheet by name
+async function findExistingSheet(drive, schoolName) {
+    try {
+        const response = await drive.files.list({
+            q: `name='Ungraded_Submissions_${schoolName}' and mimeType='application/vnd.google-apps.spreadsheet'`,
+            fields: 'files(id, webViewLink)',
+        });
+
+        return response.data.files.length > 0 ? response.data.files[0] : null;
+    } catch (error) {
+        console.error(`Error finding existing sheet for ${schoolName}:`, error.message);
+        return null;
     }
 }
 
@@ -95,9 +121,12 @@ async function generateAssignmentReportForSchool(school) {
     const { name, baseUrl, token, serviceAccountKey } = school;
     console.log(`Generating report for school: ${name}`);
     
+    // Initialize workbook at the start
+    const wb = new xl.Workbook();
+    let ws;
+    
     try {
-        const wb = new xl.Workbook();
-        const ws = wb.addWorksheet('Ungraded Submissions');
+        ws = wb.addWorksheet('Ungraded Submissions');
 
         // Set column widths
         ws.column(1).setWidth(10);  // Course ID
@@ -282,9 +311,7 @@ async function generateAssignmentReportForSchool(school) {
             }
         }
 
-        // Use school name for local file to avoid conflicts
-        const formattedDate = new Date().toISOString().split('T')[0];
-        const filePath = `Ungraded_Submissions_${name}_${formattedDate}.xlsx`;
+        const filePath = `Ungraded_Submissions_${name}.xlsx`;
         await new Promise((resolve, reject) => {
             wb.write(filePath, (err) => {
                 if (err) reject(err);
@@ -294,8 +321,9 @@ async function generateAssignmentReportForSchool(school) {
         console.log(`Excel file generated for ${name}:`, filePath);
 
         const { drive } = getGoogleApis(serviceAccountKey);
-        const googleSheetLink = await uploadToGoogleSheets(drive, filePath, name);
-        console.log(`Report generated and uploaded to Google Sheets for ${name}: ${googleSheetLink}`);
+        const existingSheet = await findExistingSheet(drive, name);
+        const { id, link } = await uploadToGoogleSheets(drive, filePath, name, existingSheet ? existingSheet.id : null);
+        console.log(`Report ${existingSheet ? 'updated' : 'generated and uploaded'} to Google Sheets for ${name}: ${link}`);
 
         fs.unlink(filePath, (err) => {
             if (err) {
@@ -305,15 +333,41 @@ async function generateAssignmentReportForSchool(school) {
             }
         });
 
-        return googleSheetLink;
+        return link;
     } catch (error) {
         console.error(`Error generating report for ${name}:`, error.message);
         if (error.response) {
             console.error('Response data:', error.response.data);
         }
+        // Create minimal error report if possible
+        if (ws) {
+            ws.cell(2, 1).string(`Error generating report: ${error.message}`);
+            const filePath = `Ungraded_Submissions_${name}_Error.xlsx`;
+            await new Promise((resolve, reject) => {
+                wb.write(filePath, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            });
+            console.log(`Error report generated for ${name}:`, filePath);
+            
+            const { drive } = getGoogleApis(serviceAccountKey);
+            const existingSheet = await findExistingSheet(drive, name);
+            const { id, link } = await uploadToGoogleSheets(drive, filePath, name, existingSheet ? existingSheet.id : null);
+            
+            fs.unlink(filePath, (err) => {
+                if (err) {
+                    console.error(`Error deleting local error Excel file for ${name}:`, err.message);
+                }
+            });
+            
+            return link;
+        }
         throw error;
     }
 }
+
+// ... (rest of the code remains unchanged)
 
 // Function to generate reports for all schools
 async function generateAssignmentReport() {
