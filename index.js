@@ -2,15 +2,33 @@ const express = require('express');
 const axios = require('axios');
 const xl = require('excel4node');
 const { google } = require('googleapis');
+const cors = require("cors");
 const fs = require('fs');
 const https = require("https");
 const config = require('./config.json');
 const cron = require('node-cron');
+const mongoose = require('mongoose');
+const Report = require('./models/Report');
 
 const app = express();
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 const port = config.port;
 const FORMAT = config.format;
-const DAYS_BACK = config.daysBack || 600; // Default to 600 days if not specified
+const DAYS_BACK = config.daysBack || 600;
+
+// Connect to MongoDB
+mongoose.connect('mongodb+srv://yohannesmulat777:pu7nRPz0rTeXGFuF@yohannes444.e23yh9p.mongodb.net/moodleReports', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('Connected to MongoDB');
+}).catch(err => {
+  console.error('MongoDB connection error:', err.message);
+});
 
 // Helper function to make API calls
 async function fetchMoodleData(baseUrl, token, wsfunction, params) {
@@ -19,7 +37,7 @@ async function fetchMoodleData(baseUrl, token, wsfunction, params) {
         const response = await axios.get(url, {
             params,
             httpsAgent: new https.Agent({
-                rejectUnauthorized: false, // Disable SSL verification
+                rejectUnauthorized: false,
             }),
         });
 
@@ -53,7 +71,7 @@ function getGoogleApis(serviceAccountKey) {
     };
 }
 
-// Function to upload .xlsx file to Google Drive and convert to Google Sheets
+// Function to upload .lsx file to Google Drive and convert to Google Sheets
 async function uploadToGoogleSheets(drive, filePath, schoolName, existingFileId = null) {
     try {
         const fileMetadata = {
@@ -68,7 +86,6 @@ async function uploadToGoogleSheets(drive, filePath, schoolName, existingFileId 
 
         let response;
         if (existingFileId) {
-            // Update existing file
             response = await drive.files.update({
                 fileId: existingFileId,
                 resource: fileMetadata,
@@ -76,14 +93,12 @@ async function uploadToGoogleSheets(drive, filePath, schoolName, existingFileId 
                 fields: 'id, webViewLink',
             });
         } else {
-            // Create new file
             response = await drive.files.create({
                 resource: fileMetadata,
                 media: media,
                 fields: 'id, webViewLink',
             });
 
-            // Set permissions for new file
             await drive.permissions.create({
                 fileId: response.data.id,
                 requestBody: {
@@ -121,23 +136,20 @@ async function generateAssignmentReportForSchool(school) {
     const { name, baseUrl, token, serviceAccountKey } = school;
     console.log(`Generating report for school: ${name}`);
     
-    // Initialize workbook at the start
     const wb = new xl.Workbook();
     let ws;
     
     try {
         ws = wb.addWorksheet('Ungraded Submissions');
 
-        // Set column widths
-        ws.column(1).setWidth(10);  // Course ID
-        ws.column(2).setWidth(30);  // Submission Name
-        ws.column(3).setWidth(20);  // Student Name
-        ws.column(4).setWidth(20);  // Student Username
-        ws.column(5).setWidth(30);  // Student Email
-        ws.column(6).setWidth(25);  // Date Submitted
-        ws.column(7).setWidth(75);  // Direct Link to Submission
+        ws.column(1).setWidth(10);
+        ws.column(2).setWidth(30);
+        ws.column(3).setWidth(20);
+        ws.column(4).setWidth(20);
+        ws.column(5).setWidth(30);
+        ws.column(6).setWidth(25);
+        ws.column(7).setWidth(75);
 
-        // Set headers
         const headers = [
             'Course ID',
             'Submission Name',
@@ -168,7 +180,6 @@ async function generateAssignmentReportForSchool(school) {
         const courseResults = await Promise.all(coursePromises);
         console.log(`Fetched contents for all courses in ${name}`);
 
-        // Calculate time threshold for filtering submissions (X days ago)
         const timeThreshold = Math.floor(Date.now() / 1000) - (DAYS_BACK * 24 * 60 * 60);
 
         const modulePromises = [];
@@ -244,10 +255,8 @@ async function generateAssignmentReportForSchool(school) {
                     const assignment = items.find(a => a.id === assignmentData.assignmentid);
                     const submissionList = assignmentData.submissions || [];
                     submissionList.forEach(submission => {
-                        console.log(`Checking assignment: ${assignment.name}, User: ${submission.userid}, GradingStatus: ${submission.gradingstatus}, Time: ${new Date(submission.timemodified * 1000).toISOString()}`);
                         if ((submission.gradingstatus === 'notgraded') && 
                             submission.timemodified >= timeThreshold) {
-                            console.log(`Including assignment submission: ${assignment.name}, User: ${submission.userid}, Submitted: ${new Date(submission.timemodified * 1000).toISOString()}`);
                             allSubmissions.push({
                                 courseId: assignment.shortname,
                                 submissionName: assignment.name,
@@ -263,7 +272,6 @@ async function generateAssignmentReportForSchool(school) {
                 data.attempts.forEach(attempt => {
                     const quiz = items.find(q => q.id === attempt.quiz);
                     if (attempt.timefinish >= timeThreshold) {
-                        console.log(`Including quiz attempt: ${quiz.name}, User: ${attempt.userid}, Submitted: ${new Date(attempt.timefinish * 1000).toISOString()}`);
                         allSubmissions.push({
                             courseId: quiz.shortname,
                             submissionName: quiz.name,
@@ -277,9 +285,12 @@ async function generateAssignmentReportForSchool(school) {
             }
         }
 
+        let submissions = [];
+        let errorMessage = null;
         if (allSubmissions.length === 0) {
             console.log(`No ungraded submissions found within the last ${DAYS_BACK} days for ${name}.`);
             ws.cell(2, 1).string(`No ungraded submissions found within the last ${DAYS_BACK} days for ${name}.`);
+            errorMessage = `No ungraded submissions found within the last ${DAYS_BACK} days for ${name}.`;
         } else {
             const uniqueStudentIds = [...new Set(allSubmissions.map(s => s.studentId))];
             const userPromises = uniqueStudentIds.map(studentId =>
@@ -296,17 +307,24 @@ async function generateAssignmentReportForSchool(school) {
             const userMap = new Map(userResults.map(r => [r.studentId, r.user]));
 
             for (const submission of allSubmissions) {
-                console.log(`Processing ungraded submission for student ${submission.studentId} in ${name}`);
                 const student = userMap.get(submission.studentId) || {};
-                ws.cell(row, 1).string(submission.courseId);
-                ws.cell(row, 2).string(submission.submissionName);
-                ws.cell(row, 3).string(student.fullname || 'Unknown');
-                ws.cell(row, 4).string(student.username || 'Unknown');
-                ws.cell(row, 5).string(student.email || 'Unknown');
-                ws.cell(row, 6).string(submission.dateSubmitted);
-                ws.cell(row, 7).string(
-                    `${baseUrl.replace('/webservice/rest/server.php', '')}/mod/${submission.type}/view.php?id=${submission.cmid}&rownum=0&action=grader&userid=${submission.studentId}`
-                );
+                const submissionData = {
+                    courseId: submission.courseId,
+                    submissionName: submission.submissionName,
+                    studentName: student.fullname || 'Unknown',
+                    studentUsername: student.username || 'Unknown',
+                    studentEmail: student.email || 'Unknown',
+                    dateSubmitted: new Date(submission.dateSubmitted),
+                    directLink: `${baseUrl.replace('/webservice/rest/server.php', '')}/mod/${submission.type}/view.php?id=${submission.cmid}&rownum=0&action=grader&userid=${submission.studentId}`
+                };
+                ws.cell(row, 1).string(submissionData.courseId);
+                ws.cell(row, 2).string(submissionData.submissionName);
+                ws.cell(row, 3).string(submissionData.studentName);
+                ws.cell(row, 4).string(submissionData.studentUsername);
+                ws.cell(row, 5).string(submissionData.studentEmail);
+                ws.cell(row, 6).string(submissionData.dateSubmitted.toISOString());
+                ws.cell(row, 7).string(submissionData.directLink);
+                submissions.push(submissionData);
                 row++;
             }
         }
@@ -323,7 +341,29 @@ async function generateAssignmentReportForSchool(school) {
         const { drive } = getGoogleApis(serviceAccountKey);
         const existingSheet = await findExistingSheet(drive, name);
         const { id, link } = await uploadToGoogleSheets(drive, filePath, name, existingSheet ? existingSheet.id : null);
-        console.log(`Report ${existingSheet ? 'updated' : 'generated and uploaded'} to Google Sheets for ${name}: ${link}`);
+
+        // Check for existing report in MongoDB
+        let report = await Report.findOne({ schoolName: name });
+        if (report) {
+            // Update existing report
+            report.submissions = submissions;
+            report.errorMessage = errorMessage;
+            report.googleSheetsLink = link;
+            report.fileId = id;
+            await report.save();
+            console.log(`Updated MongoDB report for ${name}`);
+        } else {
+            // Create new report
+            report = new Report({
+                schoolName: name,
+                submissions,
+                errorMessage,
+                googleSheetsLink: link,
+                fileId: id
+            });
+            await report.save();
+            console.log(`Created new MongoDB report for ${name}`);
+        }
 
         fs.unlink(filePath, (err) => {
             if (err) {
@@ -333,13 +373,13 @@ async function generateAssignmentReportForSchool(school) {
             }
         });
 
+        console.log(`Report ${existingSheet ? 'updated' : 'generated and uploaded'} to Google Sheets for ${name}: ${link}`);
         return link;
     } catch (error) {
         console.error(`Error generating report for ${name}:`, error.message);
         if (error.response) {
             console.error('Response data:', error.response.data);
         }
-        // Create minimal error report if possible
         if (ws) {
             ws.cell(2, 1).string(`Error generating report: ${error.message}`);
             const filePath = `Ungraded_Submissions_${name}_Error.xlsx`;
@@ -355,6 +395,28 @@ async function generateAssignmentReportForSchool(school) {
             const existingSheet = await findExistingSheet(drive, name);
             const { id, link } = await uploadToGoogleSheets(drive, filePath, name, existingSheet ? existingSheet.id : null);
             
+            // Save error report to MongoDB
+            let report = await Report.findOne({ schoolName: name });
+            const errorMessage = `Error generating report: ${error.message}`;
+            if (report) {
+                report.submissions = [];
+                report.errorMessage = errorMessage;
+                report.googleSheetsLink = link;
+                report.fileId = id;
+                await report.save();
+                console.log(`Updated MongoDB error report for ${name}`);
+            } else {
+                report = new Report({
+                    schoolName: name,
+                    submissions: [],
+                    errorMessage,
+                    googleSheetsLink: link,
+                    fileId: id
+                });
+                await report.save();
+                console.log(`Created new MongoDB error report for ${name}`);
+            }
+
             fs.unlink(filePath, (err) => {
                 if (err) {
                     console.error(`Error deleting local error Excel file for ${name}:`, err.message);
@@ -366,8 +428,6 @@ async function generateAssignmentReportForSchool(school) {
         throw error;
     }
 }
-
-// ... (rest of the code remains unchanged)
 
 // Function to generate reports for all schools
 async function generateAssignmentReport() {
@@ -390,6 +450,58 @@ app.get('/generate-report', async (req, res) => {
         res.send(`Reports generated:\n${message}`);
     } catch (error) {
         res.status(500).send('Error generating reports');
+    }
+});
+
+// Endpoint to fetch report for a specific school
+app.get('/reports/:schoolName', async (req, res) => {
+    try {
+      const { schoolName } = req.params;
+      const { submissionName } = req.query; // Get filter from query parameter
+      let query = { schoolName };
+  
+      const report = await Report.findOne(query);
+      if (!report) {
+        return res.status(404).json({ message: `No report found for school: ${schoolName}` });
+      }
+  
+      // Apply filter if submissionName is provided
+      let filteredSubmissions = report.submissions;
+      if (submissionName) {
+        filteredSubmissions = report.submissions.filter((submission) =>
+          submission.submissionName.toLowerCase().includes(submissionName.toLowerCase())
+        );
+      }
+  
+      res.json({
+        schoolName: report.schoolName,
+        submissions: filteredSubmissions,
+        errorMessage: report.errorMessage,
+        googleSheetsLink: report.googleSheetsLink,
+        createdAt: report.createdAt,
+        updatedAt: report.updatedAt
+      });
+    } catch (error) {
+      console.error(`Error fetching report for ${req.params.schoolName}:`, error.message);
+      res.status(500).json({ message: 'Error fetching report' });
+    }
+  });
+
+// Endpoint to fetch all reports
+app.get('/reports', async (req, res) => {
+    try {
+        const reports = await Report.find({});
+        res.json(reports.map(report => ({
+            schoolName: report.schoolName,
+            submissions: report.submissions,
+            errorMessage: report.errorMessage,
+            googleSheetsLink: report.googleSheetsLink,
+            createdAt: report.createdAt,
+            updatedAt: report.updatedAt
+        })));
+    } catch (error) {
+        console.error('Error fetching all reports:', error.message);
+        res.status(500).json({ message: 'Error fetching reports' });
     }
 });
 
