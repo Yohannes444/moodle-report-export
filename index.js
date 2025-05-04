@@ -12,7 +12,7 @@ const Report = require('./models/Report');
 
 const app = express();
 app.use(cors({
-  origin: '*',
+  origin: ['*','https://moodle-student-hub.lovable.app/'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
