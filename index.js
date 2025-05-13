@@ -10,6 +10,8 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const Report = require('./models/Report');
 const School = require('./models/School');
+const path = require("path");
+const bodyParser = require("body-parser");
 
 const app = express();
 app.use(cors({
@@ -445,6 +447,10 @@ async function generateAssignmentReport() {
     return results.join('\n');
 }
 
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(bodyParser.urlencoded({ extended: true, limit: "50mb" }));
+app.use(bodyParser.json({ limit: "50mb" }));
+
 // Express route to trigger report generation manually
 app.get('/generate-report', async (req, res) => {
     try {
@@ -457,6 +463,7 @@ app.get('/generate-report', async (req, res) => {
 
 app.post("/create-school", async (req, res) => {
     try {
+        console.log("Creating school:", req.body);
         //payload validation
         if (!req.body.name || !req.body.baseUrl || !req.body.token ) {
             return res.status(400).json({ message: "Missing required fields" });
