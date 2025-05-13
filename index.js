@@ -453,6 +453,26 @@ app.get('/generate-report', async (req, res) => {
     }
 });
 
+
+
+// Endpoint to fetch all reports
+app.get('/reports', async (req, res) => {
+    try {
+        console.log('Fetching all reports');
+        const reports = await Report.find({});
+        res.json(reports.map(report => ({
+            schoolName: report.schoolName,
+            submissions: report.submissions,
+            errorMessage: report.errorMessage,
+            googleSheetsLink: report.googleSheetsLink,
+            createdAt: report.createdAt,
+            updatedAt: report.updatedAt
+        })));
+    } catch (error) {
+        console.error('Error fetching all reports:', error.message);
+        res.status(500).json({ message: 'Error fetching reports' });
+    }
+});
 // Endpoint to fetch report for a specific school
 app.get('/reports/:schoolName', async (req, res) => {
     try {
@@ -486,26 +506,6 @@ app.get('/reports/:schoolName', async (req, res) => {
       res.status(500).json({ message: 'Error fetching report' });
     }
   });
-
-// Endpoint to fetch all reports
-app.get('/reports', async (req, res) => {
-    try {
-        console.log('Fetching all reports');
-        const reports = await Report.find({});
-        res.json(reports.map(report => ({
-            schoolName: report.schoolName,
-            submissions: report.submissions,
-            errorMessage: report.errorMessage,
-            googleSheetsLink: report.googleSheetsLink,
-            createdAt: report.createdAt,
-            updatedAt: report.updatedAt
-        })));
-    } catch (error) {
-        console.error('Error fetching all reports:', error.message);
-        res.status(500).json({ message: 'Error fetching reports' });
-    }
-});
-
 app.get("/", async (req, res) => {
     res.send(`hello`);
 });
