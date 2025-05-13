@@ -12,7 +12,7 @@ const Report = require('./models/Report');
 
 const app = express();
 app.use(cors({
-  origin: ['*','https://moodle-student-hub.lovable.app/'],
+  origin: ['*','https://moodle-student-hub.lovable.app/','http://localhost:8080','https://preview--moodle-student-hub.lovable.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -490,6 +490,7 @@ app.get('/reports/:schoolName', async (req, res) => {
 // Endpoint to fetch all reports
 app.get('/reports', async (req, res) => {
     try {
+        console.log('Fetching all reports');
         const reports = await Report.find({});
         res.json(reports.map(report => ({
             schoolName: report.schoolName,
