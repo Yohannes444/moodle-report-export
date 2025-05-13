@@ -9,6 +9,7 @@ const config = require('./config.json');
 const cron = require('node-cron');
 const mongoose = require('mongoose');
 const Report = require('./models/Report');
+const School = require('./models/School');
 
 const app = express();
 app.use(cors({
@@ -432,7 +433,8 @@ async function generateAssignmentReportForSchool(school) {
 // Function to generate reports for all schools
 async function generateAssignmentReport() {
     const results = [];
-    for (const school of config.schools) {
+    const schools = await School.find();
+    for (const school of schools) {
         try {
             const link = await generateAssignmentReportForSchool(school);
             results.push(`Report for ${school.name}: ${link}`);
@@ -453,7 +455,20 @@ app.get('/generate-report', async (req, res) => {
     }
 });
 
-
+app.post("/create-school", async (req, res) => {
+    try {
+        //payload validation
+        if (!req.body.name || !req.body.baseUrl || !req.body.token ) {
+            return res.status(400).json({ message: "Missing required fields" });
+        }
+        const { name, baseUrl, token, serviceAccountKey } = req.body;
+        const school = new School({ name, baseUrl, token, serviceAccountKey });
+        await school.save();
+        res.status(200).json(school);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
 
 // Endpoint to fetch all reports
 app.get('/reports', async (req, res) => {
