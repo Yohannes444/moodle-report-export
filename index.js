@@ -481,15 +481,16 @@ app.post("/create-school", async (req, res) => {
 app.get('/reports', async (req, res) => {
     try {
         console.log('Fetching all reports');
-        const reports = await Report.find({});
-        res.json(reports.map(report => ({
+        const reports = await Report.find({}).lean();
+        const sortedReports = reports.map(report => ({
             schoolName: report.schoolName,
-            submissions: report.submissions,
+            submissions: report.submissions.sort((a, b) => b.dateSubmitted - a.dateSubmitted),
             errorMessage: report.errorMessage,
             googleSheetsLink: report.googleSheetsLink,
             createdAt: report.createdAt,
             updatedAt: report.updatedAt
-        })));
+        }));
+        res.json(sortedReports);
     } catch (error) {
         console.error('Error fetching all reports:', error.message);
         res.status(500).json({ message: 'Error fetching reports' });
