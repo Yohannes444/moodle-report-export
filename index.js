@@ -12,7 +12,7 @@ const Report = require('./models/Report');
 const School = require('./models/School');
 const path = require("path");
 const bodyParser = require("body-parser");
-
+const { getStatistics } = require('./service/staticservice');
 const app = express();
 app.use(cors({
   origin: ['*','https://moodle-student-hub.lovable.app/','http://localhost:8080','https://preview--moodle-student-hub.lovable.app'],
@@ -460,6 +460,8 @@ app.get('/generate-report', async (req, res) => {
         res.status(500).send('Error generating reports');
     }
 });
+
+app.get("/statistics",getStatistics)
 
 app.post("/create-school", async (req, res) => {
     try {
