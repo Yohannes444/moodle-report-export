@@ -15,7 +15,7 @@ const bodyParser = require("body-parser");
 const { getStatistics } = require('./service/staticservice');
 const app = express();
 app.use(cors({
-  origin: ['*','https://moodle-student-hub.lovable.app/', "https://id-preview--742b57b4-885f-4866-8211-d42906db0762.lovable.app/",'http://localhost:8080/','https://preview--moodle-student-hub.lovable.app/'],
+  origin: ['*','https://moodle-student-hub.lovable.app/', "https://id-preview--742b57b4-885f-4866-8211-d42906db0762.lovable.app",'http://localhost:8080/','https://preview--moodle-student-hub.lovable.app/'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
