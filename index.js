@@ -136,7 +136,7 @@ async function findExistingSheet(drive, schoolName) {
 
 async function generateAssignmentReport() {
   try {
-    const schools = await Report.find(); // Fetch schools
+    const schools = await School.find(); // Fetch schools
     if (!schools || schools.length === 0) {
       console.log("No schools found in Report collection.");
       return "No schools found.";
