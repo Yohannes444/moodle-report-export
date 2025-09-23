@@ -143,7 +143,6 @@ async function generateAssignmentReport() {
     }
 
     console.log(`Found ${schools.length} schools. Generating reports in parallel...`);
-    console.log("scholes==> ", schools)
 
     const results = await Promise.all(
       schools.map(async (school) => {
@@ -166,7 +165,9 @@ async function generateAssignmentReport() {
 }
 
 
-// Function to generate report for ungraded assignments and quizzes for a single school
+
+
+// Function to generate reports for all schools
 async function generateAssignmentReportForSchool(school) {
     const { name, baseUrl, token, serviceAccountKey } = school;
     console.log(`Generating report for school: ${name}`);
@@ -217,6 +218,18 @@ async function generateAssignmentReportForSchool(school) {
 
         const timeThreshold = Math.floor(Date.now() / 1000) - (DAYS_BACK * 24 * 60 * 60);
 
+        // Fetch enrolled users for the course
+        const enrolledUsersPromises = courseResults.map(({ courseId }) =>
+            fetchMoodleData(baseUrl, token, 'core_enrol_get_enrolled_users', { courseid: courseId })
+                .then(users => ({ courseId, users: users || [] }))
+                .catch(err => {
+                    console.error(`Error fetching enrolled users for course ${courseId} in ${name}:`, err.message);
+                    return { courseId, users: [] };
+                })
+        );
+        const enrolledUsersResults = await Promise.all(enrolledUsersPromises);
+        const userMapByCourse = new Map(enrolledUsersResults.map(r => [r.courseId, r.users]));
+
         const modulePromises = [];
         for (const { courseId, shortname, contents } of courseResults) {
             const assignments = [];
@@ -256,29 +269,43 @@ async function generateAssignmentReportForSchool(school) {
             }
 
             if (quizzes.length > 0) {
-                const quizIds = quizzes.map(q => q.id);
-                modulePromises.push(
-                    fetchMoodleData(baseUrl, token, 'mod_quiz_get_user_attempts', { 'quizids': quizIds, 'status': 'finished' })
-                        .then(async attemptsData => {
-                            const ungradedAttempts = [];
-                            for (const attempt of attemptsData.attempts || []) {
-                                const gradeData = await fetchMoodleData(baseUrl, token, 'mod_quiz_get_user_best_grade', {
-                                    quizid: attempt.quiz,
-                                    userid: attempt.userid
-                                }).catch(err => {
-                                    console.error(`Error fetching grade for quiz ${attempt.quiz}, user ${attempt.userid} in ${name}:`, err.message);
-                                    return { hasgrade: false };
-                                });
-                                if (!gradeData.hasgrade) {
-                                    ungradedAttempts.push(attempt);
-                                }
-                            }
-                            return { type: 'quiz', items: quizzes, data: { attempts: ungradedAttempts } };
-                        }).catch(err => {
-                            console.error(`Error fetching quiz attempts for course ${courseId} in ${name}:`, err.message);
-                            return { type: 'quiz', items: quizzes, data: { attempts: [] } };
-                        })
-                );
+                const users = userMapByCourse.get(courseId) || [];
+                for (const quiz of quizzes) {
+                    for (const user of users) {
+                        modulePromises.push(
+                            fetchMoodleData(baseUrl, token, 'mod_quiz_get_user_attempts', {
+                                quizid: quiz.id,
+                                userid: user.id,
+                                status: 'all', // Include all attempt states
+                                includepreviews: 1 // Include preview attempts
+                            })
+                                .then(async attemptsData => {
+                                    const ungradedAttempts = [];
+                                    for (const attempt of attemptsData.attempts || []) {
+                                        const gradeData = await fetchMoodleData(baseUrl, token, 'mod_quiz_get_user_best_grade', {
+                                            quizid: attempt.quiz,
+                                            userid: attempt.userid
+                                        }).catch(err => {
+                                            console.error(`Error fetching grade for quiz ${attempt.quiz}, user ${attempt.userid} in ${name}:`, err.message);
+                                            return { hasgrade: false };
+                                        });
+                                        if (!gradeData.hasgrade) {
+                                            ungradedAttempts.push(attempt);
+                                        }
+                                    }
+                                    return {
+                                        type: 'quiz',
+                                        items: [quiz],
+                                        data: { attempts: ungradedAttempts }
+                                    };
+                                })
+                                .catch(err => {
+                                    console.error(`Error fetching quiz attempts for quiz ${quiz.id}, user ${user.id} in ${name}:`, err.message);
+                                    return { type: 'quiz', items: [quiz], data: { attempts: [] } };
+                                })
+                        );
+                    }
+                }
             }
         }
         const moduleResults = await Promise.all(modulePromises);
@@ -463,8 +490,6 @@ async function generateAssignmentReportForSchool(school) {
         throw error;
     }
 }
-
-
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: true, limit: "50mb" }));
