@@ -37,6 +37,8 @@ mongoose.connect('mongodb+srv://yohannesmulat777:pu7nRPz0rTeXGFuF@yohannes444.e2
 async function fetchMoodleData(baseUrl, token, wsfunction, params) {
     try {
         const url = `${baseUrl}?wstoken=${token}&wsfunction=${wsfunction}&moodlewsrestformat=${FORMAT}`;
+        console.log("==>> url", url)
+        console.log("==>> params", params)
         const response = await axios.get(url, {
             params,
             httpsAgent: new https.Agent({
@@ -557,6 +559,7 @@ app.get('/reports', async (req, res) => {
         res.status(500).json({ message: 'Error fetching reports' });
     }
 });
+
 // Endpoint to fetch report for a specific school
 app.get('/reports/:schoolName', async (req, res) => {
     try {
